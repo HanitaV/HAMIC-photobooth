@@ -31,6 +31,15 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Upload speed test probe endpoint (lightweight, no disk/cloud storage)
+app.post('/api/ping-upload', express.raw({ type: 'application/octet-stream', limit: '1mb' }), (req, res) => {
+  res.json({
+    status: 'ok',
+    bytesReceived: req.body ? req.body.length : 0,
+    timestamp: Date.now()
+  });
+});
+
 // Upload endpoint
 app.post('/api/upload', upload.fields([
   { name: 'photo', maxCount: 1 },

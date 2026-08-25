@@ -1,5 +1,6 @@
 
 import { FrameCoord } from '../constants';
+import { AdaptiveCompressionConfig, getCachedCompressionConfig } from './networkSpeedService';
 
 const loadImage = (src: string): Promise<HTMLImageElement> => {
   return new Promise((resolve, reject) => {
@@ -130,7 +131,8 @@ export const calculateFrameLayout = async (frameSrc: string): Promise<{ coords: 
 export const mergePhotosWithFrame = async (
   photoDataUrls: string[],
   frameSrc: string,
-  coords: FrameCoord[]
+  coords: FrameCoord[],
+  customConfig?: AdaptiveCompressionConfig
 ): Promise<{ blob: Blob, dataUrl: string, compressedBlob: Blob }> => {
   const mergeCanvas = document.createElement('canvas');
   const ctx = mergeCanvas.getContext('2d');
@@ -192,6 +194,7 @@ export const mergePhotosWithFrame = async (
 
     const dataUrl = mergeCanvas.toDataURL('image/png');
     
+    // 1. High quality PNG for local downloads / printing
     const blob = await new Promise<Blob>((resolve, reject) => {
         mergeCanvas.toBlob((b) => {
             if (b) {
@@ -202,21 +205,41 @@ export const mergePhotosWithFrame = async (
         }, 'image/png');
     });
 
-    // Create a highly compressed WebP version specifically for uploading to ImgBB
-    // This retains transparency but drops the size from ~15MB to ~500KB for fast uploads.
+    // 2. Adaptive WebP version specifically optimized for uploading to ImgBB based on network speed
+    const config = customConfig || getCachedCompressionConfig();
+    let uploadCanvas: HTMLCanvasElement = mergeCanvas;
+
+    // Scale canvas dimensions if network is slow/medium to significantly decrease payload
+    if (config.scale < 1.0) {
+      const scaledCanvas = document.createElement('canvas');
+      scaledCanvas.width = Math.max(1, Math.round(mergeCanvas.width * config.scale));
+      scaledCanvas.height = Math.max(1, Math.round(mergeCanvas.height * config.scale));
+      const sCtx = scaledCanvas.getContext('2d');
+      if (sCtx) {
+        sCtx.imageSmoothingEnabled = true;
+        sCtx.imageSmoothingQuality = 'high';
+        sCtx.drawImage(mergeCanvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+        uploadCanvas = scaledCanvas;
+      }
+    }
+
     const compressedBlob = await new Promise<Blob>((resolve, reject) => {
-        mergeCanvas.toBlob((b) => {
+        uploadCanvas.toBlob((b) => {
             if (b) {
                 resolve(b);
             } else {
-                // Fallback to jpeg if webp fails for some obscure reason
-                mergeCanvas.toBlob((fallbackB) => {
+                // Fallback to jpeg if webp fails for any browser quirks
+                uploadCanvas.toBlob((fallbackB) => {
                      if (fallbackB) resolve(fallbackB);
                      else reject(new Error("Canvas fallback toBlob failed"));
-                }, 'image/jpeg', 0.8);
+                }, 'image/jpeg', config.quality);
             }
-        }, 'image/webp', 0.75);
+        }, 'image/webp', config.quality);
     });
+
+    console.log(
+      `[ImageCompression] Original PNG: ${(blob.size / 1024 / 1024).toFixed(2)} MB, Upload WebP: ${(compressedBlob.size / 1024).toFixed(1)} KB (Quality: ${config.quality}, Scale: ${config.scale}, Tier: ${config.tier})`
+    );
 
     return { blob, dataUrl, compressedBlob };
   } catch (error) {

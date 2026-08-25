@@ -8,6 +8,7 @@ import { photoboothFrames, FrameCoord } from './constants';
 import { mergePhotosWithFrame, calculateFrameLayout } from './services/imageService';
 import { saveBlobToDirectory } from './services/fileSystemService';
 import { uploadToBackend } from './services/backendService';
+import { measureUploadSpeed } from './services/networkSpeedService';
 import {
   initializeLibraries,
   analyzeAndCacheImage,
@@ -102,6 +103,9 @@ const App: React.FC = () => {
       }
     };
     loadLibs();
+
+    // Initial background network speed test probe
+    measureUploadSpeed().catch(() => {});
   }, []);
 
   // Tự động phân tích và áp dụng preset mặc định (original) khi chụp xong và thư viện đã sẵn sàng
@@ -221,6 +225,9 @@ const App: React.FC = () => {
   }, []);
 
   const startPhotoSequence = useCallback(async () => {
+    // Trigger background speed test to have fresh network stats ready for upload
+    measureUploadSpeed().catch(() => {});
+
     setStatus('capturing');
     setCapturedPhotos([]);
     setTimelapseUrl(null); // Clear previous video
