@@ -18,7 +18,6 @@ import {
 
 type AppStatus = 'idle' | 'countdown' | 'capturing' | 'processing' | 'finished';
 
-const GOOGLE_DRIVE_FOLDER = "https://drive.google.com/drive/folders/1KY_DPlWtR5q0aKfae5uVF53FDFFJoELL?usp=sharing";
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>('idle');
@@ -38,7 +37,7 @@ const App: React.FC = () => {
   
   // State for QR Code
   const [showQr, setShowQr] = useState(false);
-  const [qrUrl, setQrUrl] = useState<string>(GOOGLE_DRIVE_FOLDER);
+  const [qrUrl, setQrUrl] = useState<string>('');
 
   // States cho xử lý ảnh nâng cao
   const [libsLoaded, setLibsLoaded] = useState(false);
@@ -268,7 +267,7 @@ const App: React.FC = () => {
     
     try {
       // 1. Generate final photo strip
-      const { blob, dataUrl } = await mergePhotosWithFrame(photosToMerge, currentFrame.frame_content, activeFrameCoords);
+      const { blob, dataUrl, compressedBlob } = await mergePhotosWithFrame(photosToMerge, currentFrame.frame_content, activeFrameCoords);
       const imageFilename = `hamic-photobooth-${currentFrame.topic}-${Date.now()}.png`;
 
       // Show QR Modal in loading state right away to improve UX
@@ -317,14 +316,15 @@ const App: React.FC = () => {
         }, 500);
       }
 
-      // 3. Upload photo and timelapse to backend (ImgBB)
-      console.log('Uploading photo and timelapse to ImgBB via backend...');
-      const uploadedUrl = await uploadToBackend(blob, timelapseBlob, currentFrame.topic);
+      // 3. Upload COMPRESSED photo and timelapse to backend (ImgBB)
+      console.log('Uploading highly compressed photo and timelapse to ImgBB via backend...');
+      const uploadedUrl = await uploadToBackend(compressedBlob, timelapseBlob, currentFrame.topic);
       if (uploadedUrl) {
         setQrUrl(uploadedUrl);
       } else {
-        console.warn('Failed to upload, falling back to static Drive folder.');
-        setQrUrl(GOOGLE_DRIVE_FOLDER);
+        console.error('Failed to upload, unable to generate QR.');
+        alert('Tải ảnh lên máy chủ thất bại. Không thể tạo mã QR!');
+        setShowQr(false);
       }
 
       // Upload finished, URL is updated and QR will be generated

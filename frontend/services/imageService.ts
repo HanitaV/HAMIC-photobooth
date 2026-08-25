@@ -131,7 +131,7 @@ export const mergePhotosWithFrame = async (
   photoDataUrls: string[],
   frameSrc: string,
   coords: FrameCoord[]
-): Promise<{ blob: Blob, dataUrl: string }> => {
+): Promise<{ blob: Blob, dataUrl: string, compressedBlob: Blob }> => {
   const mergeCanvas = document.createElement('canvas');
   const ctx = mergeCanvas.getContext('2d');
 
@@ -202,7 +202,23 @@ export const mergePhotosWithFrame = async (
         }, 'image/png');
     });
 
-    return { blob, dataUrl };
+    // Create a highly compressed WebP version specifically for uploading to ImgBB
+    // This retains transparency but drops the size from ~15MB to ~500KB for fast uploads.
+    const compressedBlob = await new Promise<Blob>((resolve, reject) => {
+        mergeCanvas.toBlob((b) => {
+            if (b) {
+                resolve(b);
+            } else {
+                // Fallback to jpeg if webp fails for some obscure reason
+                mergeCanvas.toBlob((fallbackB) => {
+                     if (fallbackB) resolve(fallbackB);
+                     else reject(new Error("Canvas fallback toBlob failed"));
+                }, 'image/jpeg', 0.8);
+            }
+        }, 'image/webp', 0.75);
+    });
+
+    return { blob, dataUrl, compressedBlob };
   } catch (error) {
     console.error("Error in mergePhotosWithFrame:", error);
     throw error;
