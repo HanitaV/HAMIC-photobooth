@@ -1,4 +1,4 @@
-const BACKEND_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:5000';
+import { BACKEND_URL } from './backendService';
 
 export interface AdaptiveCompressionConfig {
   quality: number;       // WebP quality between 0.0 and 1.0
@@ -69,6 +69,7 @@ export const measureUploadSpeed = async (
   apiUrl: string = BACKEND_URL,
   timeoutMs: number = 1500
 ): Promise<AdaptiveCompressionConfig> => {
+  if (!apiUrl) return cachedConfig;
   // If recently measured (< 45s ago), reuse cache to save bandwidth
   if (cachedConfig.measuredAt && Date.now() - cachedConfig.measuredAt < 45000) {
     return cachedConfig;

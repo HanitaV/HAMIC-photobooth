@@ -7,7 +7,7 @@ import { QrCodeModal } from './components/QrCodeModal';
 import { photoboothFrames, FrameCoord } from './constants';
 import { mergePhotosWithFrame, calculateFrameLayout } from './services/imageService';
 import { saveBlobToDirectory } from './services/fileSystemService';
-import { uploadToBackend } from './services/backendService';
+import { uploadToBackend, isSharingEnabled } from './services/backendService';
 import { measureUploadSpeed } from './services/networkSpeedService';
 import {
   initializeLibraries,
@@ -31,6 +31,9 @@ const App: React.FC = () => {
   // State for dynamic frame layout
   const [activeFrameCoords, setActiveFrameCoords] = useState<FrameCoord[]>([]);
   const [frameDimensions, setFrameDimensions] = useState<{w: number, h: number}>({ w: 0, h: 0 });
+  const [frameLoading, setFrameLoading] = useState(true);
+  const [frameError, setFrameError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState('');
   
   // State for timelapse video
   const [timelapseUrl, setTimelapseUrl] = useState<string | null>(null);
@@ -67,19 +70,27 @@ const App: React.FC = () => {
 
   // Calculate frame layout dynamically on load or when frame changes
   useEffect(() => {
+    let cancelled = false;
+    setFrameLoading(true);
+    setFrameError(null);
     const analyzeFrame = async () => {
       try {
         const layout = await calculateFrameLayout(currentFrame.frame_content);
-        setActiveFrameCoords(layout.coords);
+        if (cancelled) return;
+        setActiveFrameCoords(layout.coords.length ? layout.coords : currentFrame.coords);
         setFrameDimensions({ w: layout.width, h: layout.height });
         console.log("Calculated Frame Layout:", layout);
       } catch (err) {
         console.error("Failed to analyze frame:", err);
-        // Fallback to hardcoded if calculation fails
-        setActiveFrameCoords(currentFrame.coords); 
+        if (cancelled) return;
+        setFrameError('Không thể tải khung ảnh. Hãy chọn khung khác hoặc tải lại trang.');
+        setActiveFrameCoords([]);
+      } finally {
+        if (!cancelled) setFrameLoading(false);
       }
     };
     analyzeFrame();
+    return () => { cancelled = true; };
   }, [currentFrame]);
 
   // Cleanup timelapse URL on unmount or when changed
@@ -171,7 +182,7 @@ const App: React.FC = () => {
   }, [capturedPhotos, imageCache]);
 
   const startTimelapse = useCallback(() => {
-    if (videoRef.current && videoRef.current.srcObject) {
+    if (typeof MediaRecorder !== 'undefined' && videoRef.current && videoRef.current.srcObject) {
       recordedChunksRef.current = [];
       const stream = videoRef.current.srcObject as MediaStream;
       try {
@@ -225,6 +236,14 @@ const App: React.FC = () => {
   }, []);
 
   const startPhotoSequence = useCallback(async () => {
+    if (frameLoading || frameError || activeFrameCoords.length === 0) return;
+    if (!videoRef.current?.videoWidth || !videoRef.current?.videoHeight) {
+      alert('Camera chưa sẵn sàng. Vui lòng cho phép truy cập camera và thử lại.');
+      return;
+    }
+    setSaveMessage('');
+    setProcessedPhotos([]);
+    setImageCache([]);
     // Trigger background speed test to have fresh network stats ready for upload
     measureUploadSpeed().catch(() => {});
 
@@ -261,9 +280,10 @@ const App: React.FC = () => {
     }
     stopTimelapse();
     setStatus('finished');
-  }, [takePhoto, startTimelapse, stopTimelapse, activeFrameCoords]);
+  }, [takePhoto, startTimelapse, stopTimelapse, activeFrameCoords, frameLoading, frameError]);
 
   const handleDownload = useCallback(async () => {
+    if (frameLoading || frameError || activeFrameCoords.length === 0) return;
     const photosToMerge = processedPhotos.length > 0 ? processedPhotos : capturedPhotos;
     if (photosToMerge.length < activeFrameCoords.length) {
       alert(`Please take ${activeFrameCoords.length} photos first.`);
@@ -278,8 +298,11 @@ const App: React.FC = () => {
       const imageFilename = `hamic-photobooth-${currentFrame.topic}-${Date.now()}.png`;
 
       // Show QR Modal in loading state right away to improve UX
-      setQrUrl('');
-      setShowQr(true);
+      setSaveMessage('');
+      if (isSharingEnabled) {
+        setQrUrl('');
+        setShowQr(true);
+      }
 
       try {
         await saveBlobToDirectory(blob, imageFilename);
@@ -324,13 +347,17 @@ const App: React.FC = () => {
       }
 
       // 3. Upload COMPRESSED photo and timelapse to backend (ImgBB)
+      if (!isSharingEnabled) {
+        setSaveMessage('Đã lưu ảnh. Chia sẻ QR khả dụng khi kết nối máy chủ.');
+        return;
+      }
       console.log('Uploading highly compressed photo and timelapse to ImgBB via backend...');
       const uploadedUrl = await uploadToBackend(compressedBlob, timelapseBlob, currentFrame.topic);
       if (uploadedUrl) {
         setQrUrl(uploadedUrl);
       } else {
         console.error('Failed to upload, unable to generate QR.');
-        alert('Tải ảnh lên máy chủ thất bại. Không thể tạo mã QR!');
+        setSaveMessage('Ảnh đã lưu về máy. Chưa thể tải lên để tạo mã QR.');
         setShowQr(false);
       }
 
@@ -343,9 +370,10 @@ const App: React.FC = () => {
     } finally {
       setStatus('finished');
     }
-  }, [capturedPhotos, processedPhotos, activeFrameCoords, currentFrame, timelapseBlob, timelapseUrl]);
+  }, [capturedPhotos, processedPhotos, activeFrameCoords, currentFrame, timelapseBlob, timelapseUrl, frameLoading, frameError]);
 
   const reset = () => {
+      setSaveMessage('');
       setCapturedPhotos([]);
       setProcessedPhotos([]);
       setImageCache([]);
@@ -445,6 +473,7 @@ const App: React.FC = () => {
           frameDimensions={frameDimensions}
           onNext={nextFrame}
           onPrev={prevFrame}
+          disabled={status === 'countdown' || status === 'capturing' || status === 'processing'}
         />
       </main>
 
@@ -454,7 +483,12 @@ const App: React.FC = () => {
         onStart={startPhotoSequence}
         onDownload={handleDownload}
         onReset={reset}
+        disabled={frameLoading || Boolean(frameError)}
       />
+
+      {(frameError || saveMessage) && (
+        <p role="status" className="mt-4 text-center text-sm text-[#FDEFB2]">{frameError || saveMessage}</p>
+      )}
 
       {showQr && (
         <QrCodeModal 
